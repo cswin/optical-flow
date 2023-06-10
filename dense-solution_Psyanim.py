@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import subprocess
 import argparse
 import os
-
+import pandas as pd
 parser = argparse.ArgumentParser(description='Parameters ')
 parser.add_argument('--video_path', default='/data/peng/SocialPerceptionModelingData/data/video_data_psyanim_socialscore/', type=str,
                     help='the folder includes videos ')
@@ -104,9 +104,12 @@ def get_dense_optical_flow_images(video_path, result_path):
     prev_gray = cv.cvtColor(first_frame, cv.COLOR_BGR2GRAY)
     # Creates an image filled with zero intensities with the same dimensions as the frame
     mask = np.zeros_like(first_frame)
+    arrow_mask = np.zeros_like(first_frame)  # new mask for arrows
     # Sets image saturation to maximum
     mask[..., 1] = 255
     frame_count = 0
+    # Define a list to store data from each frame
+    data_list = []
     while (cap.isOpened()):
         # ret = a boolean return value from getting the frame, frame = the current frame being projected in the video
         ret, frame = cap.read()
@@ -119,12 +122,52 @@ def get_dense_optical_flow_images(video_path, result_path):
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
         # Calculates dense optical flow by Farneback method
         # https://docs.opencv.org/3.0-beta/modules/video/doc/motion_analysis_and_object_tracking.html#calcopticalflowfarneback
+        #So what you are actually getting is a matrix that has the same size as your input frame.
+        #Each element in that flow matrix is a point that represents the displacement of that
+        # pixel from the prev frame. Meaning that you get a point with x and y values
+        # (in pixel units) that gives you the delta x and delta y from the last frame.
         flow = cv.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-        # Computes the magnitude and angle of the 2D vectors
+
+        # Find gray and black pixels
+        gray_indices = np.where((gray < 128) & (gray >= 50))
+        black_indices = np.where(gray < 50)
+
+        # Append the data for gray pixels
+        for i in range(len(gray_indices[0])):
+            y, x = gray_indices[0][i], gray_indices[1][i]
+            dx, dy = flow[y, x]
+            data_list.append([frame_count, x, y, 'gray', dx, dy])
+
+        # Append the data for black pixels
+        for i in range(len(black_indices[0])):
+            y, x = black_indices[0][i], black_indices[1][i]
+            dx, dy = flow[y, x]
+            data_list.append([frame_count, x, y, 'black', dx, dy])
+
+
+        # Visualization of optical flow as arrows
+        # flow vectors every 10 pixels.
+        step = 10
+        y, x = np.mgrid[step / 2:frame.shape[0]:step, step / 2:frame.shape[1]:step].reshape(2, -1).astype(int)
+        fx, fy = flow[y, x].T
+
+        # create line endpoints
+        lines = np.vstack([x, y, x + fx, y + fy]).T.reshape(-1, 2, 2)
+        lines = np.int32(lines)
+
+        # create line mask
+        arrow_mask = np.zeros_like(frame)
+        for (x1, y1), (x2, y2) in lines:
+            cv.arrowedLine(arrow_mask, (x1, y1), (x2, y2), (0, 255, 0), 1, tipLength=0.5)
+
+        # overlay line mask on frame
+        output_arrow_overlay = cv.add(frame, arrow_mask)
+
+        # Computes the x magnitude and y  angle directions of the 2D vectors
         magnitude, angle = cv.cartToPolar(flow[..., 0], flow[..., 1])
-        # Sets image hue according to the optical flow direction
+        # Sets image hue according to the optical flow y direction
         mask[..., 0] = angle * 180 / np.pi / 2
-        # Sets image value according to the optical flow magnitude (normalized)
+        # Sets image value according to the optical flow x direction (normalized)
         mask[..., 2] = cv.normalize(magnitude, None, 0, 255, cv.NORM_MINMAX)
         # Converts HSV to RGB (BGR) color representation
         rgb = cv.cvtColor(mask, cv.COLOR_HSV2BGR)
@@ -133,16 +176,31 @@ def get_dense_optical_flow_images(video_path, result_path):
 
         outimage = os.path.join(result_path, str(frame_count) + ".png")
         cv.imwrite(outimage, rgb)
+        # Overlays the optical flow tracks on the original frame
+        output_overlay = cv.add(frame, rgb)
+        outimage_overlay_output_path = os.path.join(result_path, "overlay_" + str(frame_count) + ".png")
+        cv.imwrite(outimage_overlay_output_path, output_overlay)
 
+
+        # Save arrow image
+        arrow_outimage = os.path.join(result_path, "arrow_" + str(frame_count) + ".png")
+        cv.imwrite(arrow_outimage, arrow_mask)
+
+        arrow_outimage_overlay_output_path = os.path.join(result_path, "overlay_arrow_" + str(frame_count) + ".png")
+        cv.imwrite(arrow_outimage_overlay_output_path, output_arrow_overlay)
 
         # Updates previous frame
         prev_gray = gray
-        # Frames are read by intervals of 1 millisecond. The programs breaks out of the while loop when the user presses the 'q' key
-        # if cv.waitKey(1) & 0xFF == ord('q'):
-        #     break
+
+
+
     # The following frees up resources and closes all windows
     cap.release()
     cv.destroyAllWindows()
+    # Save the data into a single CSV file
+    df_flow = pd.DataFrame(data_list, columns=['frame', 'x', 'y', 'color', 'dx', 'dy'])
+
+    return df_flow #return the dataframe of optical flow
 
 
 def convert_image2video(image_folder, video_name):
@@ -151,8 +209,30 @@ def convert_image2video(image_folder, video_name):
     command = 'ffmpeg -y -r 30 -f image2 -s 600x450 -i \"{}\" -vcodec libx264 -crf 25 -pix_fmt yuv420p \"{}\" '.format(
         os.path.join(image_folder, "%d.png"), video_name)
     # Execute command
-    subprocess.call(command, shell=True)
+    # subprocess.call(command, shell=True)
+    try:
+        output = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        print("Error occurred:", e.output)
 
+    command = 'ffmpeg -y -r 30 -f image2 -s 600x450 -i \"{}\" -vcodec libx264 -crf 25 -pix_fmt yuv420p \"{}\" '.format(
+        os.path.join(image_folder, "overlay_arrow_%d.png"), video_name[:-4]+'_overlay_arrow.mp4')
+    # Execute command
+    # subprocess.call(command, shell=True)
+    try:
+        output = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        print("Error occurred:", e.output)
+
+
+    command = 'ffmpeg -y -r 30 -f image2 -s 600x450 -i \"{}\" -vcodec libx264 -crf 25 -pix_fmt yuv420p \"{}\" '.format(
+        os.path.join(image_folder, "overlay_%d.png"), video_name[:-4]+'_overlay.mp4')
+    # Execute command
+    # subprocess.call(command, shell=True)
+    try:
+        output = subprocess.check_output(command, shell=True, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        print("Error occurred:", e.output)
 
 if __name__ == '__main__':
     #get the video path
@@ -172,7 +252,9 @@ if __name__ == '__main__':
             os.makedirs(result_path)
         #get the optical flow images
         print("get the optical flow images")
-        get_dense_optical_flow_images(video_path, result_path)
+        df_flow = get_dense_optical_flow_images(video_path, result_path)
+        # After processing all frames, save the DataFrame to a CSV file
+        df_flow.to_csv(os.path.join(result_root_path, video_name + "_optical_flow.csv"), index=False)
         #convert the optical flow images into video
         print("convert the optical flow images into video")
         convert_image2video(result_path, os.path.join(result_root_path,video_name + '.mp4'))
