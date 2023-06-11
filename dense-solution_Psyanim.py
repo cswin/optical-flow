@@ -1,6 +1,8 @@
 
 import cv2 as cv
 import numpy as np
+from PIL import Image
+
 import matplotlib.pyplot as plt
 import subprocess
 import argparse
@@ -9,7 +11,7 @@ import pandas as pd
 parser = argparse.ArgumentParser(description='Parameters ')
 parser.add_argument('--video_path', default='/data/peng/SocialPerceptionModelingData/data/video_data_psyanim_socialscore/', type=str,
                     help='the folder includes videos ')
-parser.add_argument('--result_root_path', default='/data/peng/SocialPerceptionModelingData/data/opticalflow_dense/', type=str,
+parser.add_argument('--result_root_path', default='/data/peng/SocialPerceptionModelingData/data/opticalflow_dense/csv/', type=str,
                     help='the folder includes extracted frames from videos ')
 
 
@@ -89,6 +91,52 @@ def get_sparse_optical_flow_images(video_path, result_path):
     cv.destroyAllWindows()
 
 
+def find_unique_pixel_grayscale(data):
+    # Convert the image into a numpy array
+    data = np.array(data)
+
+    # Get the unique pixel values
+    unique_pixels = np.unique(data)
+
+    # Print the unique pixel values
+    for pixel in unique_pixels:
+        print(pixel)
+
+def find_unique_pixel_RGB(data):
+
+
+    # Get the unique pixel values
+    unique_pixels = np.unique(data.reshape(-1, data.shape[2]), axis=0)
+
+    # Print the unique pixel values
+    for pixel in unique_pixels:
+        print(pixel)
+
+def find_black_grey_pixel(data):
+
+
+    # Define the color ranges for black and grey
+    black = [0, 0, 0]
+    grey = [128, 128, 128]
+
+    # Create an empty list to hold the coordinates of the black and grey pixels
+    black_pixels = []
+    grey_pixels = []
+
+    # Loop through each pixel in the image
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            # If the pixel is black or grey, add its coordinates to the respective list
+            if (data[i, j] == black).all():
+                black_pixels.append((i, j))
+            elif (data[i, j] == grey).all():
+                grey_pixels.append((i, j))
+
+    # Now you have a list of all the black and grey pixels in the image
+    print('Black pixels:', black_pixels)
+    print('Grey pixels:', grey_pixels)
+
+
 def get_dense_optical_flow_images(video_path, result_path):
     # The video feed is read in as a VideoCapture object
     cap = cv.VideoCapture(video_path)
@@ -110,10 +158,17 @@ def get_dense_optical_flow_images(video_path, result_path):
         frame_count = frame_count + 1
         if frame is None:
             break
+
         # Opens a new window and displays the input frame
         # cv.imshow("input", frame)
         # Converts each frame to grayscale - we previously only converted the first frame to grayscale
         gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        # Find gray and black pixels
+        # find_unique_pixel_grayscale(gray)
+        # plt.imshow(gray)
+        # plt.show()
+
+
         # Calculates dense optical flow by Farneback method
         # https://docs.opencv.org/3.0-beta/modules/video/doc/motion_analysis_and_object_tracking.html#calcopticalflowfarneback
         #So what you are actually getting is a matrix that has the same size as your input frame.
@@ -123,8 +178,8 @@ def get_dense_optical_flow_images(video_path, result_path):
         flow = cv.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
 
         # Find gray and black pixels
-        gray_indices = np.where((gray < 128) & (gray >= 50))
-        black_indices = np.where(gray < 50)
+        gray_indices = np.where((gray < 160) & (gray >= 140))
+        black_indices = np.where(gray < 60)
 
         # Append the data for gray pixels
         for i in range(len(gray_indices[0])):
